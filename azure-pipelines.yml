@@ -1,0 +1,71 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  name: Default
+
+variables:
+  JAVA_VERSION: '21'
+  MAVEN_CACHE_FOLDER: '$(Pipeline.Workspace)/.m2/repository'
+  MAVEN_OPTS: '-Dmaven.repo.local=$(MAVEN_CACHE_FOLDER)'
+
+stages:
+  - stage: build_and_sbom
+    displayName: 'Build and generate CycloneDX SBOM'
+    jobs:
+      - job: build
+        displayName: 'Build Spring Petclinic'
+        steps:
+          - checkout: self
+            clean: true
+            fetchDepth: 1
+            persistCredentials: false
+
+          - task: JavaToolInstaller@0
+            displayName: 'Use Java $(JAVA_VERSION)'
+            inputs:
+              versionSpec: '$(JAVA_VERSION)'
+              jdkArchitectureOption: 'x64'
+              jdkSourceOption: 'PreInstalled'
+
+          - task: Cache@2
+            displayName: 'Cache Maven repository'
+            inputs:
+              key: 'maven | "$(Agent.OS)" | pom.xml'
+              restoreKeys: |
+                maven | "$(Agent.OS)"
+              path: '$(MAVEN_CACHE_FOLDER)'
+
+          - script: chmod +x mvnw
+            displayName: 'Make Maven wrapper executable'
+
+          - script: |
+              ./mvnw -B -ntp clean package -DskipTests
+            displayName: 'Build JAR without tests'
+            env:
+              MAVEN_OPTS: $(MAVEN_OPTS)
+
+          - script: |
+              ./mvnw -B -ntp org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom -DskipTests
+            displayName: 'Generate CycloneDX SBOM'
+            env:
+              MAVEN_OPTS: $(MAVEN_OPTS)
+
+          - script: |
+              echo "Generated files:"
+              ls -la target || true
+            displayName: 'List target contents'
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish JAR artifact'
+            inputs:
+              PathtoPublish: 'target'
+              ArtifactName: 'petclinic-build'
+              publishLocation: 'Container'
